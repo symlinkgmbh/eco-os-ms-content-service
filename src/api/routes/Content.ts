@@ -32,6 +32,10 @@ export class ContentRoute extends AbstractRoutes implements PkApi.IRoute {
     key: "",
   };
 
+  private postContentFederationPattern: PkApi.IValidatorPattern = {
+    checksum: "",
+  };
+
   constructor(app: Application) {
     super(app);
     this.contentController = new ContentController();
@@ -40,7 +44,9 @@ export class ContentRoute extends AbstractRoutes implements PkApi.IRoute {
 
   public activate(): void {
     this.addContent();
+    this.addContentFromFederation();
     this.getContent();
+    this.getContentFromFederation();
     this.revokeOutdatedContent();
   }
 
@@ -67,12 +73,50 @@ export class ContentRoute extends AbstractRoutes implements PkApi.IRoute {
       });
   }
 
+  private addContentFromFederation(): void {
+    this.getApp()
+      .route("/content/federation")
+      .post((req: Request, res: Response, next: NextFunction) => {
+        if (!isArray(req.body)) {
+          this.validatorService.validate(req.body, this.postContentFederationPattern);
+        } else {
+          const contentArr = req.body;
+          contentArr.map((entry) => {
+            this.validatorService.validate(entry, this.postContentFederationPattern);
+          });
+        }
+        this.contentController
+          .addContent(req)
+          .then(() => {
+            res.sendStatus(200);
+          })
+          .catch((err) => {
+            next(err);
+          });
+      });
+  }
+
   private getContent(): void {
     this.getApp()
       .route("/content/:checksum")
       .get((req: Request, res: Response, next: NextFunction) => {
         this.contentController
           .getContent(req)
+          .then((result) => {
+            res.send(result);
+          })
+          .catch((err) => {
+            next(err);
+          });
+      });
+  }
+
+  private getContentFromFederation(): void {
+    this.getApp()
+      .route("/content/federation/:checksum")
+      .get((req: Request, res: Response, next: NextFunction) => {
+        this.contentController
+          .processContentRequestFromFederation(req)
           .then((result) => {
             res.send(result);
           })

@@ -19,18 +19,21 @@
 
 import { Request } from "express";
 import { injectContentService } from "@symlinkde/eco-os-pk-storage-content";
-import { MsContent, PkStorageContent, MsOverride } from "@symlinkde/eco-os-pk-models";
+import { MsContent, PkStorageContent, MsOverride, PkCore } from "@symlinkde/eco-os-pk-models";
 import { CustomRestError, apiResponseCodes } from "@symlinkde/eco-os-pk-api";
 import { isArray } from "util";
+import { injectFederationClient } from "@symlinkde/eco-os-pk-core";
 
+@injectFederationClient
 @injectContentService
 export class ContentController {
-  public contentService!: PkStorageContent.IContentService;
+  private contentService!: PkStorageContent.IContentService;
+  private federationClient!: PkCore.IEcoFederationClient;
 
   public async addContent(req: Request): Promise<void> {
     if (isArray(req.body)) {
       req.body.map(async (entry) => {
-        const { checksum, key, liveTime, domain } = entry;
+        const { checksum, key, liveTime, domain, maxOpen } = entry;
         if (liveTime !== undefined && liveTime !== null) {
           const ttl = new Date(liveTime);
           const resultWithDate = await this.contentService.addContent(<MsContent.IContent>{
@@ -38,13 +41,14 @@ export class ContentController {
             key,
             liveTime: ttl,
             domain,
+            maxOpen,
           });
 
           if (resultWithDate === null) {
             throw new CustomRestError(
               {
-                code: 400,
-                message: "Problem in creating content entry with ttl",
+                code: apiResponseCodes.C850.code,
+                message: apiResponseCodes.C850.message,
               },
               400,
             );
@@ -53,19 +57,19 @@ export class ContentController {
           return;
         }
 
-        const result = await this.contentService.addContent(<MsContent.IContent>{ checksum, key, domain });
+        const result = await this.contentService.addContent(<MsContent.IContent>{ checksum, key, domain, maxOpen });
         if (result === null) {
           throw new CustomRestError(
             {
-              code: 400,
-              message: "Problem in creating content entry",
+              code: apiResponseCodes.C851.code,
+              message: apiResponseCodes.C851.message,
             },
             400,
           );
         }
       });
     } else {
-      const { checksum, key, liveTime, domain } = req.body;
+      const { checksum, key, liveTime, domain, maxOpen } = req.body;
       if (liveTime !== undefined && liveTime !== null) {
         const ttl = new Date(liveTime);
         const resultWithDate = await this.contentService.addContent(<MsContent.IContent>{
@@ -73,13 +77,14 @@ export class ContentController {
           key,
           liveTime: ttl,
           domain,
+          maxOpen,
         });
 
         if (resultWithDate === null) {
           throw new CustomRestError(
             {
-              code: 400,
-              message: "Problem in creating content entry with ttl",
+              code: apiResponseCodes.C850.code,
+              message: apiResponseCodes.C850.message,
             },
             400,
           );
@@ -88,12 +93,12 @@ export class ContentController {
         return;
       }
 
-      const result = await this.contentService.addContent(<MsContent.IContent>{ checksum, key, domain });
+      const result = await this.contentService.addContent(<MsContent.IContent>{ checksum, key, domain, maxOpen });
       if (result === null) {
         throw new CustomRestError(
           {
-            code: 400,
-            message: "Problem in creating content entry",
+            code: apiResponseCodes.C851.code,
+            message: apiResponseCodes.C851.message,
           },
           400,
         );
@@ -105,7 +110,31 @@ export class ContentController {
   public async getContent(req: MsOverride.IRequest): Promise<MsContent.IContent> {
     const checksum = decodeURIComponent(req.params.checksum);
     const result = await this.contentService.getContent(checksum);
-    if (result === null) {
+    return this.processLoadedContent(result);
+  }
+
+  public async processContentRequestFromFederation(req: MsOverride.IRequest): Promise<MsContent.IContent> {
+    const checksum = decodeURIComponent(req.params.checksum);
+    try {
+      const result = await this.contentService.getContent(checksum);
+      return this.processFederationContent(result);
+    } catch (err) {
+      throw new CustomRestError(
+        {
+          code: 404,
+          message: "er",
+        },
+        404,
+      );
+    }
+  }
+
+  public async revokeOutdatedContent(): Promise<boolean> {
+    return await this.contentService.revokeOutdatedContent();
+  }
+
+  private async processLoadedContent(content: MsContent.IContent | null): Promise<MsContent.IContent> {
+    if (content === null) {
       throw new CustomRestError(
         {
           code: apiResponseCodes.C821.code,
@@ -115,10 +144,25 @@ export class ContentController {
       );
     }
 
-    return result;
+    if ((content.key === null || content.key.trim().length < 1) && content.domain !== undefined) {
+      const resultFromFederation = await this.federationClient.getRemoteContent(content.checksum, content.domain);
+      return resultFromFederation.data.data;
+    }
+
+    return content;
   }
 
-  public async revokeOutdatedContent(): Promise<boolean> {
-    return await this.contentService.revokeOutdatedContent();
+  private processFederationContent(content: MsContent.IContent | null): MsContent.IContent {
+    if (content === null) {
+      throw new CustomRestError(
+        {
+          code: apiResponseCodes.C821.code,
+          message: apiResponseCodes.C821.message,
+        },
+        404,
+      );
+    }
+
+    return content;
   }
 }
